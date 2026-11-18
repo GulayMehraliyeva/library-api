@@ -7,6 +7,7 @@ import loan_repository
 import fines
 import notifications
 import validation
+import checks
 
 from errors import bad_request, conflict, not_found
 
@@ -43,10 +44,10 @@ def current_fine(loan):
 
 
 def is_overdue(loan):
-    return (
-        loan["returned"] == 0
-        and fines.days_late(loan["due_date"]) > 0
-    )
+    return checks.is_loan_overdue(
+    loan,
+    fines.days_late(loan["due_date"])
+)
 
 
 def list_loans(only_overdue=False):
@@ -84,14 +85,14 @@ def create_loan(data):
     if member is None:
         raise not_found("member not found")
 
-    if book["available"] == 0:
+    if not checks.is_book_available(book):
         raise conflict("book is not available")
 
     existing_loans = loan_repository.list_loans_for_member(
         data["member_id"]
     )
 
-    if total_owed(existing_loans) > 0:
+    if checks.has_unpaid_fines(total_owed(existing_loans)):
         raise conflict("member has unpaid fines")
 
     limit = (
@@ -129,7 +130,7 @@ def create_loan(data):
 def return_book(loan_id):
     loan = get_loan(loan_id)
 
-    if loan["returned"] == 1:
+    if checks.is_loan_returned(loan):
         raise conflict("loan already returned")
 
     fine = fines.fine_for(loan["due_date"])
@@ -156,13 +157,13 @@ def return_book(loan_id):
 def renew_loan(loan_id):
     loan = get_loan(loan_id)
 
-    if loan["returned"] == 1:
+    if checks.is_loan_returned(loan):
         raise conflict("loan already returned")
 
     if date.fromisoformat(loan["due_date"]) < date.today():
         raise conflict("overdue loans cannot be renewed")
 
-    if loan["renewals"] >= MAX_RENEWALS:
+    if checks.has_exceeded_renewal_limit(loan, MAX_RENEWALS):
         raise conflict("loan was already renewed")
 
     new_due = (
@@ -187,10 +188,10 @@ def renew_loan(loan_id):
 def pay_fine(loan_id):
     loan = get_loan(loan_id)
 
-    if loan["returned"] == 0:
+    if not checks.is_loan_returned(loan):
         raise conflict("return the book before paying")
 
-    if loan["fine"] <= 0 or loan["fine_paid"] == 1:
+    if not checks.has_fine_to_pay(loan):
         raise conflict("no fine to pay")
 
     updated = loan_repository.mark_fine_paid(loan_id)
